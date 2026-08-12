@@ -1,0 +1,120 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isCompanyUser(companyId) {
+      return isSignedIn() && (
+        request.auth.token.companyId == companyId ||
+        (request.auth.token.companyId == null && (companyId == 'company-default' || companyId == 'default_company' || companyId == 'spedition-hueber'))
+      );
+    }
+
+    function isStrictCompanyUser(companyId) {
+      return isSignedIn() && (
+        request.auth.token.companyId == null ||
+        request.auth.token.companyId == companyId
+      );
+    }
+
+    function isNotViewer() {
+      return request.auth.token.role == null || request.auth.token.role != 'viewer';
+    }
+
+    function isValidCaseOnCreate(companyId) {
+      return request.resource.data.title is string 
+        && request.resource.data.title.size() > 0 
+        && request.resource.data.customerId is string
+        && (
+          !('companyId' in request.resource.data) || request.resource.data.companyId == companyId
+        )
+        && (
+          !('version' in request.resource.data) || (request.resource.data.version is number && request.resource.data.version >= 1)
+        );
+    }
+
+    function isValidCaseOnUpdate(companyId) {
+      return (!('companyId' in request.resource.data) || request.resource.data.companyId == companyId)
+        && (!('companyId' in resource.data) || request.resource.data.companyId == resource.data.companyId)
+        && (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt)
+        && (!('version' in request.resource.data) || !('version' in resource.data) || request.resource.data.version >= resource.data.version)
+        && (!(resource.data.status != 'archived' && request.resource.data.status == 'archived') || isNotViewer());
+    }
+
+    // 1. Root Fallback - STRICT DEFAULT DENY
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Customers Collection (Authenticated only)
+    match /customers/{customerId} {
+      allow read, write: if isSignedIn() && isValidId(customerId);
+    }
+
+    // 3. Workers Collection (Authenticated only)
+    match /workers/{workerId} {
+      allow read, write: if isSignedIn() && isValidId(workerId);
+    }
+
+    // 4. Companies Scoped Collections (Tenant Isolated & Authenticated)
+    match /companies/{companyId} {
+      allow read: if isCompanyUser(companyId);
+
+      // Cases Subcollection
+      match /cases/{caseId} {
+        allow read: if isCompanyUser(companyId) && isValidId(caseId);
+        allow create: if isCompanyUser(companyId) && isValidId(caseId) && isValidCaseOnCreate(companyId);
+        allow update: if isCompanyUser(companyId) && isValidId(caseId) && isValidCaseOnUpdate(companyId);
+        allow delete: if isCompanyUser(companyId) && isValidId(caseId) && isNotViewer();
+      }
+
+      // Metadata Subcollection
+      match /metadata/{docId} {
+        allow read, write: if isCompanyUser(companyId) && isValidId(docId);
+      }
+
+      // Documents Subcollection
+      match /documents/{docId} {
+        allow read, create, update: if isCompanyUser(companyId) && isValidId(docId);
+        allow delete: if isCompanyUser(companyId) && isValidId(docId) && (!('legallyBinding' in resource.data) || resource.data.legallyBinding != true);
+      }
+
+      // Workflow Exceptions
+      match /exceptions/{docId} {
+        allow read, write: if isCompanyUser(companyId) && isValidId(docId);
+      }
+
+      // Automation Policies
+      match /policies/{docId} {
+        allow read, write: if isCompanyUser(companyId) && isValidId(docId);
+      }
+
+      // Telemetry
+      match /telemetry/{docId} {
+        allow read, write: if isCompanyUser(companyId) && isValidId(docId);
+      }
+
+      // Receivables
+      match /receivables/{docId} {
+        allow read, write: if isCompanyUser(companyId) && isValidId(docId);
+      }
+
+      // Appointments
+      match /appointments/{docId} {
+        allow read, write: if isCompanyUser(companyId) && isValidId(docId);
+      }
+
+      // Config
+      match /config/{docId} {
+        allow read, write: if isCompanyUser(companyId) && isValidId(docId);
+      }
+    }
+  }
+}

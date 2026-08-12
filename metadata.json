@@ -1,0 +1,8 @@
+{
+  "name": "Remix Hueber Studio",
+  "description": "A comprehensive studio management application for Hueber, built with React and Firebase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

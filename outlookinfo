@@ -1,0 +1,245 @@
+================================================================================
+OUTLOOK MAIL & KALENDER SYNCHRONISATION - ARCHITEKTUR & CODE-DOKUMENTATION
+================================================================================
+
+Datei: /src/components/MailKalenderTab.tsx
+Zweck: Vollständige Integration von Microsoft Outlook (Mail & Kalender) über die Microsoft Graph API (OAuth 2.0 Implicit / Hybrid Flow).
+
+--------------------------------------------------------------------------------
+1. ÜBERSICHT & FUNKTIONSWEISE
+--------------------------------------------------------------------------------
+- Authentifizierung: Microsoft 365 / Azure AD / Entra ID OAuth 2.0 Authorize Endpoint
+- Graph API Endpunkte:
+  * E-Mails: https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=50&$select=id,subject,bodyPreview,from,receivedDateTime,isRead,importance,hasAttachments,body
+  * Kalender: https://graph.microsoft.com/v1.0/me/calendar/events?$top=50&$select=id,subject,start,end,location,bodyPreview,isAllDay,organizer
+- Geltungsbereiche (Scopes):
+  openid profile email User.Read Mail.Read Mail.ReadWrite Calendars.ReadWrite offline_access
+- Token-Speicherung: localStorage.getItem('ms_graph_access_token')
+
+--------------------------------------------------------------------------------
+2. KERNCALLBACKS & OAUTH-HANDLER (RELEVANTE CODE-AUSZÜGE)
+--------------------------------------------------------------------------------
+
+// A) Token Empfang aus URL Hash & Popup PostMessage Sync
+useEffect(() => {
+  const hash = window.location.hash;
+  if (hash && (hash.includes('access_token=') || hash.includes('id_token='))) {
+    const params = new URLSearchParams(hash.replace(/^#/, ''));
+    const accessToken = params.get('access_token');
+    const idToken = params.get('id_token');
+
+    if (accessToken) {
+      setSyncError(null);
+      setMsGraphToken(accessToken);
+      localStorage.setItem('ms_graph_access_token', accessToken);
+      setAccount({
+        email: loginEmailInput || 'office@spedition-hueber.at',
+        name: 'Spedition Hueber (Microsoft 365)',
+        connectedAt: new Date().toISOString().split('T')[0]
+      });
+
+      if (window.opener && window.opener !== window) {
+        try {
+          window.opener.postMessage({ type: 'MS_OAUTH_TOKEN', token: accessToken, isAccessToken: true }, '*');
+          window.close();
+          return;
+        } catch (e) {
+          console.warn('PostMessage error:', e);
+        }
+      }
+
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      triggerSyncNotification('Microsoft Outlook Access Token empfangen! Synchronisiere E-Mails & Kalender...');
+      setTimeout(() => {
+        fetchRealMsGraphEmails(accessToken);
+        fetchRealMsGraphCalendarEvents(accessToken);
+      }, 300);
+    } else if (idToken) {
+      setSyncError('⚠️ Hinweis: Es wurde nur ein ID-Token empfangen. Für den Abruf von E-Mails & Kalendern aktivieren Sie bitte im Azure Portal unter "Authentifizierung" den Haken bei "Zugriffstoken" (Access Tokens).');
+      setShowStatusModal(true);
+      setShowDiagLoginForm(true);
+      if (window.opener && window.opener !== window) {
+        try {
+          window.opener.postMessage({ type: 'MS_OAUTH_TOKEN', token: idToken, isAccessToken: false }, '*');
+          window.close();
+          return;
+        } catch (e) {
+          console.warn('PostMessage error:', e);
+        }
+      }
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }
+}, []);
+
+
+// B) Anmelde-Weiterleitung zu Microsoft (OAuth Authorize Redirect)
+const handleOpenMicrosoftOAuthWindow = () => {
+  const clientId = azureClientId.trim() || 'c2c13ed9-2a91-4cf5-a4b3-d567362f6b8c';
+  const tenantId = azureTenantId.trim() || 'common';
+  const redirectUri = window.location.origin + window.location.pathname;
+  const scopes = encodeURIComponent('openid profile email User.Read Mail.Read Mail.ReadWrite Calendars.ReadWrite offline_access');
+  const authUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?client_id=${clientId}&response_type=token%20id_token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&prompt=select_account`;
+
+  const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+  if (isIframe) {
+    const popup = window.open(authUrl, 'ms_oauth_popup', 'width=600,height=700,status=yes,toolbar=no,menubar=no,location=yes');
+    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+      window.location.href = authUrl;
+    }
+  } else {
+    window.location.href = authUrl;
+  }
+};
+
+
+// C) E-Mail Synchronisation via MS Graph API
+const fetchRealMsGraphEmails = async (providedToken?: string) => {
+  const token = (providedToken && providedToken.trim().length > 10
+    ? providedToken
+    : (msGraphToken || localStorage.getItem('ms_graph_access_token') || '')).trim();
+
+  if (!token) {
+    setSyncError('Kein Microsoft Graph Access Token hinterlegt. Bitte bei Microsoft anmelden.');
+    setShowStatusModal(true);
+    setShowDiagLoginForm(true);
+    return;
+  }
+
+  setIsSyncing(true);
+  try {
+    const endpoint = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=50&$select=id,subject,bodyPreview,from,receivedDateTime,isRead,importance,hasAttachments,body';
+    const res = await fetch(endpoint, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!res.ok) {
+      const errorJson = await res.json().catch(() => ({}));
+      const errMsg = errorJson.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+      throw new Error(errMsg);
+    }
+
+    const data = await res.json();
+    if (data.value && Array.isArray(data.value)) {
+      const realList = data.value.map((msg: any) => {
+        const fromAddress = msg.from?.emailAddress?.address || 'unbekannt@domain.com';
+        const fromName = msg.from?.emailAddress?.name || fromAddress.split('@')[0];
+        const subject = msg.subject || '(Kein Betreff)';
+
+        let category: 'Kundenanfragen' | 'Sonstige' | 'Junk' = 'Sonstige';
+        const lowerSub = subject.toLowerCase();
+        const lowerBody = (msg.bodyPreview || '').toLowerCase();
+
+        if (lowerSub.includes('umzug') || lowerSub.includes('angebot') || lowerSub.includes('anfrage') || lowerSub.includes('sperrmüll') || lowerSub.includes('entsorgung') || lowerBody.includes('preis') || lowerBody.includes('kosten')) {
+          category = 'Kundenanfragen';
+        }
+
+        return {
+          id: msg.id,
+          senderName: fromName,
+          senderEmail: fromAddress,
+          subject: subject,
+          previewText: msg.bodyPreview || 'Keine Vorschau verfügbar.',
+          fullBody: msg.body?.content || msg.bodyPreview || '',
+          timestamp: new Date(msg.receivedDateTime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+          dateIso: msg.receivedDateTime,
+          category: category,
+          isRead: !!msg.isRead,
+          isUrgent: msg.importance === 'high',
+          source: 'ms_graph'
+        };
+      });
+
+      setEmails(realList);
+      if (realList.length > 0) {
+        setSelectedEmailId(realList[0].id);
+      }
+      setSyncError(null);
+      setSyncSuccessMsg(`${realList.length} E-Mails live über Microsoft Graph API synchronisiert (${new Date().toLocaleTimeString('de-DE')})`);
+    }
+  } catch (err: any) {
+    const errMsg = err.message || 'Unbekannter MS Graph API Fehler';
+    setSyncSuccessMsg(null);
+    const isAccessDenied = errMsg.includes('Access is denied') || errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('InvalidAuthenticationToken') || errMsg.includes('ErrorAccessDenied');
+    if (isAccessDenied) {
+      setSyncError('⚠️ Microsoft Graph API Zugriff verweigert (401/403). Mögliche Ursachen: 1) Token abgelaufen (klicken Sie auf "Konto neu anmelden"). 2) Im Azure Portal muss unter Authentifizierung "Zugriffstoken" angehakt sein.');
+      setShowStatusModal(true);
+      setShowDiagLoginForm(true);
+    } else {
+      setSyncError(`MS Graph E-Mail Hinweis: ${errMsg}`);
+    }
+  } finally {
+    setIsSyncing(false);
+  }
+};
+
+
+// D) Kalender-Termin Synchronisation via MS Graph API
+const fetchRealMsGraphCalendarEvents = async (providedToken?: string) => {
+  const token = (providedToken && providedToken.trim().length > 10
+    ? providedToken
+    : (msGraphToken || localStorage.getItem('ms_graph_access_token') || '')).trim();
+
+  if (!token) {
+    setSyncError('Kein Microsoft Graph Access Token für Kalender-Sync hinterlegt.');
+    return;
+  }
+
+  setIsSyncing(true);
+  try {
+    const endpoint = 'https://graph.microsoft.com/v1.0/me/calendar/events?$top=50&$select=id,subject,start,end,location,bodyPreview,isAllDay,organizer';
+    const res = await fetch(endpoint, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!res.ok) {
+      const errorJson = await res.json().catch(() => ({}));
+      const errMsg = errorJson.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+      throw new Error(errMsg);
+    }
+
+    const data = await res.json();
+    if (data.value && Array.isArray(data.value)) {
+      const realEvents = data.value.map((evt: any) => {
+        const startIso = evt.start?.dateTime ? evt.start.dateTime.split('T')[0] : new Date().toISOString().split('T')[0];
+        const startTime = evt.start?.dateTime ? new Date(evt.start.dateTime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '09:00';
+        const endTime = evt.end?.dateTime ? new Date(evt.end.dateTime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '10:00';
+
+        return {
+          id: evt.id,
+          title: evt.subject || 'Outlook Termin',
+          date: startIso,
+          time: `${startTime} - ${endTime}`,
+          location: evt.location?.displayName || 'Online / Kein Ort',
+          description: evt.bodyPreview || '',
+          type: 'outlook',
+          status: 'Bestätigt',
+          source: 'ms_graph'
+        };
+      });
+
+      setCalendarEvents(realEvents);
+      setSyncError(null);
+      setSyncSuccessMsg(`${realEvents.length} Termine live über MS Graph Kalender API geladen`);
+    }
+  } catch (err: any) {
+    const errMsg = err.message || 'Unbekannter Kalender Sync Fehler';
+    const isAccessDenied = errMsg.includes('Access is denied') || errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('InvalidAuthenticationToken') || errMsg.includes('ErrorAccessDenied');
+    if (isAccessDenied) {
+      setSyncError('⚠️ Microsoft Graph API Kalender Zugriff verweigert. Bitte erneut auf "Konto neu anmelden" klicken oder im Azure Portal "Zugriffstoken" aktivieren.');
+      setShowStatusModal(true);
+      setShowDiagLoginForm(true);
+    } else {
+      setSyncError(`MS Graph Kalender Hinweis: ${errMsg}`);
+    }
+  } finally {
+    setIsSyncing(false);
+  }
+};
+================================================================================

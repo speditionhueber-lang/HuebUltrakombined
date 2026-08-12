@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "apps-cde32",
+    "staging": "apps-cde32-staging",
+    "production": "apps-cde32"
+  }
+}

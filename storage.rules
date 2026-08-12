@@ -1,0 +1,31 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isCompanyUser(companyId) {
+      return isSignedIn() && (
+        request.auth.token.companyId == companyId ||
+        (request.auth.token.companyId == null && (companyId == 'company-default' || companyId == 'spedition-hueber'))
+      );
+    }
+
+    match /companies/{companyId}/cases/{caseId}/documents/{documentId}/{fileName} {
+      allow read, write: if isCompanyUser(companyId)
+        && request.resource.size < 20 * 1024 * 1024
+        && (request.resource.contentType.matches('application/pdf') || request.resource.contentType.matches('image/.*') || request.resource.contentType.matches('application/.*'));
+    }
+
+    match /companies/{companyId}/documents/{documentId}/{fileName} {
+      allow read, write: if isCompanyUser(companyId)
+        && request.resource.size < 20 * 1024 * 1024
+        && (request.resource.contentType.matches('application/pdf') || request.resource.contentType.matches('image/.*') || request.resource.contentType.matches('application/.*'));
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

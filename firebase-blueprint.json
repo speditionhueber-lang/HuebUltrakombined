@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "Customer": {
+      "title": "Customer",
+      "description": "Represents a client with moving details.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "phone"]
+    },
+    "Worker": {
+      "title": "Worker",
+      "description": "Represents an employee/worker registered for FCM notifications.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fcmToken": { "type": "string" }
+      },
+      "required": ["id"]
+    },
+    "Case": {
+      "title": "Case",
+      "description": "Central workflow case containing tasks, timeline, reviews, drafts and financial data.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "type": "string" },
+        "version": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "status"]
+    },
+    "CaseRepositoryMetadata": {
+      "title": "CaseRepositoryMetadata",
+      "description": "Central persistence metadata tracking schema version, migration, and Outlook sync marker.",
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "type": "number" },
+        "repositoryVersion": { "type": "string" },
+        "lastMigrationAt": { "type": "string" },
+        "lastSyncAt": { "type": "string" }
+      },
+      "required": ["schemaVersion", "repositoryVersion"]
+    }
+  },
+  "firestore": {
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Collection of all customers and their move details."
+    },
+    "/workers/{workerId}": {
+      "schema": "Worker",
+      "description": "Collection of worker details including their FCM tokens."
+    },
+    "/companies/{companyId}/cases/{caseId}": {
+      "schema": "Case",
+      "description": "Collection of cases belonging to a company."
+    },
+    "/companies/{companyId}/metadata/{docId}": {
+      "schema": "CaseRepositoryMetadata",
+      "description": "Collection of company metadata for persistence tracking."
+    }
+  }
+}
