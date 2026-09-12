@@ -8,4 +8,5 @@ coverage
 !.env.example
 *.log
 npm-debug.log*
+.DS_Store
 server.ts.bak
