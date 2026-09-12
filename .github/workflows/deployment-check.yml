@@ -1,0 +1,60 @@
+name: AI Studio deployment check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - server.ts
+      - vite.config.ts
+      - index.html
+      - metadata.json
+      - src/**
+      - public/**
+      - .github/workflows/deployment-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-cloud-run-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build production container
+        run: docker build --tag hueber-ai-studio:deployment-check .
+
+      - name: Start container and verify health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          container_id="$(docker run --detach \
+            --publish 8080:8080 \
+            --env PORT=8080 \
+            --env GEMINI_API_KEY=test-key \
+            --env FIREBASE_PROJECT_ID=apps-cde32 \
+            hueber-ai-studio:deployment-check)"
+
+          cleanup() {
+            docker logs "$container_id" || true
+            docker rm --force "$container_id" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/api/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "The container did not become healthy within 60 seconds." >&2
+          exit 1
