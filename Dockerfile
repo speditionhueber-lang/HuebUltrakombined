@@ -4,13 +4,14 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 COPY package.json ./
-RUN npm install --no-audit --no-fund
+RUN npm install --global npm@12.0.2 --no-audit --no-fund \
+    && npm install --include=dev --legacy-peer-deps --no-audit --no-fund
 
 COPY . .
 RUN npm run build \
     && test -f dist/index.html \
     && test -f dist/server.cjs \
-    && npm prune --omit=dev
+    && npm prune --omit=dev --legacy-peer-deps
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
