@@ -11,7 +11,8 @@ COPY . .
 RUN npm run build \
     && test -f dist/index.html \
     && test -f dist/server.cjs \
-    && npm prune --omit=dev --legacy-peer-deps
+    && npm prune --omit=dev --legacy-peer-deps \
+    && npm install --omit=dev --legacy-peer-deps --no-save --no-audit --no-fund vite@6.4.3
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
